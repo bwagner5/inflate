@@ -11,7 +11,7 @@ $(shell mkdir -p ${BUILD_DIR})
 all: fmt verify test build
 
 build: ## build binary using current OS and Arch
-	go build -a -ldflags="-s -w -X main.version=${VERSION}" -o ${BUILD_DIR}/go-cli-template-${GOOS}-${GOARCH} ${BUILD_DIR}/../cmd/*.go
+	go build -a -ldflags="-s -w -X main.version=${VERSION}" -o ${BUILD_DIR}/inflate-${GOOS}-${GOARCH} ${BUILD_DIR}/../cmd/*.go
 
 test: ## run go tests and benchmarks
 	go test -bench=. ${BUILD_DIR}/../... -v -coverprofile=coverage.out -covermode=atomic -outputdir=${BUILD_DIR}

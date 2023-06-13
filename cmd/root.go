@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -27,6 +28,9 @@ import (
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 const (
@@ -43,18 +47,28 @@ type GlobalOptions struct {
 	Verbose    bool
 	Version    bool
 	Output     string
+	Kubeconfig string
+	Namespace  string
 	ConfigFile string
 }
 
 var (
 	globalOpts = GlobalOptions{}
 	rootCmd    = &cobra.Command{
-		Use:     "go-cli-template",
+		Use:     "inflate",
 		Version: version,
 	}
 )
 
 func main() {
+	var defaultKubeconfigPath string
+	if kconfig, ok := os.LookupEnv("KUBECONFIG"); ok {
+		defaultKubeconfigPath = kconfig
+	} else {
+		defaultKubeconfigPath = lo.Ternary(homedir.HomeDir() != "", filepath.Join(homedir.HomeDir(), ".kube", "config"), "")
+	}
+	rootCmd.PersistentFlags().StringVarP(&globalOpts.Kubeconfig, "kubeconfig", "k", defaultKubeconfigPath, "path to the kubeconfig file")
+	rootCmd.PersistentFlags().StringVarP(&globalOpts.Namespace, "namespace", "n", "inflate", "k8s namespace")
 	rootCmd.PersistentFlags().BoolVar(&globalOpts.Verbose, "verbose", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVar(&globalOpts.Version, "version", false, "version")
 	rootCmd.PersistentFlags().StringVarP(&globalOpts.Output, "output", "o", OutputTableShort,
@@ -65,6 +79,20 @@ func main() {
 	cobra.EnableCommandSorting = false
 
 	lo.Must0(rootCmd.Execute())
+}
+
+func kubeClientset() *kubernetes.Clientset {
+	config, err := clientcmd.BuildConfigFromFlags("", globalOpts.Kubeconfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	return clientset
 }
 
 func ParseConfig[T any](globalOpts GlobalOptions, opts T) (T, error) {
