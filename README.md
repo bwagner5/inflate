@@ -1,15 +1,56 @@
 # inflate
 
-DESCRIPTION HERE
+Inflate creates test deployments with various scheduling constraints. 
 
 ## Usage:
 
-
 ```
-Put Usage here
+> inflate --help
 Usage:
   inflate [command]
-...
+
+Available Commands:
+  create      create an inflatable or maybe a few
+  delete      delete an inflatable or maybe a few
+  get         get an inflatable or maybe a few
+  help        Help about any command
+
+Flags:
+  -f, --file string         YAML Config File
+  -h, --help                help for inflate
+  -k, --kubeconfig string   path to the kubeconfig file (default "/Users/wagnerbm/k8s/karpenter-dev/karpenter-dev")
+  -n, --namespace string    k8s namespace (default "inflate")
+  -o, --output string       Output mode: [short wide yaml] (default "short")
+      --verbose             Verbose output
+      --version             version
+
+Use "inflate [command] --help" for more information about a command.
+```
+
+```
+> inflate create --help
+create an inflatable or maybe a few
+
+Usage:
+  inflate create [flags]
+
+Flags:
+      --capacity-type-spread   add a capacity-type topology spread constraint
+      --dry-run                Dry-run prints the K8s manifests without applying
+  -h, --help                   help for create
+      --host-network           use host networking
+      --hostname-spread        add a hostname topology spread constraint
+  -i, --image string           Container image to use (default "public.ecr.aws/eks-distro/kubernetes/pause:3.7")
+      --random-suffix          add a random suffix to the deployment name
+  -z, --zonal-spread           add a zonal topology spread constraint
+
+Global Flags:
+  -f, --file string         YAML Config File
+  -k, --kubeconfig string   path to the kubeconfig file (default "/Users/wagnerbm/k8s/karpenter-dev/karpenter-dev")
+  -n, --namespace string    k8s namespace (default "inflate")
+  -o, --output string       Output mode: [short wide yaml] (default "short")
+      --verbose             Verbose output
+      --version             version
 ```
 
 ## Installation:
@@ -49,4 +90,22 @@ chmod +x inflate
 
 ## Examples: 
 
-EXAMPLES HERE
+```
+> inflate create --zonal-spread
+Created inflate/inflate
+
+> inflate get
+NAMESPACE	NAME
+inflate  	inflate
+
+> inflate create --random-suffix --hostname-spread --host-network -n my-ns
+Created my-ns/inflate-9797840640
+
+> inflate get
+NAMESPACE	NAME
+inflate  	inflate
+my-ns    	inflate-9797840640
+
+> inflate delete --all
+Successfully Deleted Inflates
+```
