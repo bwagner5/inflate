@@ -20,12 +20,18 @@ import (
 
 	"github.com/bwagner5/inflate/pkg/inflater"
 	"github.com/spf13/cobra"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 type CreateOptions struct {
+	DryRun             bool
+	RandomSuffix       bool
+	Image              string
 	ZonalSpread        bool
 	HostnameSpread     bool
 	CapacityTypeSpread bool
+	HostNetwork        bool
 }
 
 var (
@@ -35,23 +41,48 @@ var (
 		Short: "create an inflatable or maybe a few",
 		Args:  cobra.MinimumNArgs(0),
 		Run: func(cmd *cobra.Command, args []string) {
-			clientset := kubeClientset()
-			deployment, err := inflater.New(clientset).Inflate(cmd.Context(), inflater.Options{
-				Namespace:   globalOpts.Namespace,
-				ZonalSpread: createOptions.ZonalSpread,
-			})
+			var clientset *kubernetes.Clientset
+			if !createOptions.DryRun {
+				clientset = kubeClientset()
+			}
+			inflate := inflater.New(clientset)
+			options := inflater.Options{
+				RandomSuffix:       createOptions.RandomSuffix,
+				Namespace:          globalOpts.Namespace,
+				Image:              createOptions.Image,
+				ZonalSpread:        createOptions.ZonalSpread,
+				HostnameSpread:     createOptions.HostnameSpread,
+				CapacityTypeSpread: createOptions.CapacityTypeSpread,
+				HostNetwork:        createOptions.HostNetwork,
+			}
+			var deployment *appsv1.Deployment
+			var err error
+			if createOptions.DryRun {
+				deployment, err = inflate.GetInflateDeployment(cmd.Context(), options)
+			} else {
+				deployment, err = inflate.Inflate(cmd.Context(), options)
+			}
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
-			fmt.Printf("Created %s/%s", deployment.GetNamespace(), deployment.GetName())
+			// Output
+			if createOptions.DryRun || globalOpts.Output == OutputYAML {
+				fmt.Println(PrettyEncode(deployment))
+			} else {
+				fmt.Printf("Created %s/%s", deployment.GetNamespace(), deployment.GetName())
+			}
 		},
 	}
 )
 
 func init() {
+	cmdCreate.Flags().StringVarP(&createOptions.Image, "image", "i", "public.ecr.aws/eks-distro/kubernetes/pause:3.7", "Container image to use")
 	cmdCreate.Flags().BoolVarP(&createOptions.ZonalSpread, "zonal-spread", "z", false, "add a zonal topology spread constraint")
 	cmdCreate.Flags().BoolVar(&createOptions.HostnameSpread, "hostname-spread", false, "add a hostname topology spread constraint")
 	cmdCreate.Flags().BoolVar(&createOptions.CapacityTypeSpread, "capacity-type-spread", false, "add a capacity-type topology spread constraint")
+	cmdCreate.Flags().BoolVar(&createOptions.HostNetwork, "host-network", false, "use host networking")
+	cmdCreate.Flags().BoolVar(&createOptions.RandomSuffix, "random-suffix", false, "add a random suffix to the deployment name")
+	cmdCreate.Flags().BoolVar(&createOptions.DryRun, "dry-run", false, "Dry-run prints the K8s manifests without applying")
 	rootCmd.AddCommand(cmdCreate)
 }
