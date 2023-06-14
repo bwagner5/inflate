@@ -36,11 +36,13 @@ Usage:
 
 Flags:
       --capacity-type-spread   add a capacity-type topology spread constraint
+  -c, --cpu-arch string        CPU Architecture to use for nodeSelector
       --dry-run                Dry-run prints the K8s manifests without applying
   -h, --help                   help for create
       --host-network           use host networking
       --hostname-spread        add a hostname topology spread constraint
   -i, --image string           Container image to use (default "public.ecr.aws/eks-distro/kubernetes/pause:3.7")
+      --os string              Operating System to use for nodeSelector
       --random-suffix          add a random suffix to the deployment name
   -z, --zonal-spread           add a zonal topology spread constraint
 

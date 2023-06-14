@@ -33,6 +33,8 @@ type CreateOptions struct {
 	HostnameSpread     bool
 	CapacityTypeSpread bool
 	HostNetwork        bool
+	CPUArch            string
+	OS                 string
 }
 
 var (
@@ -55,6 +57,8 @@ var (
 				HostnameSpread:     createOptions.HostnameSpread,
 				CapacityTypeSpread: createOptions.CapacityTypeSpread,
 				HostNetwork:        createOptions.HostNetwork,
+				CPUArch:            createOptions.CPUArch,
+				OS:                 createOptions.OS,
 			}
 			var deployment *appsv1.Deployment
 			var err error
@@ -83,6 +87,8 @@ func init() {
 	cmdCreate.Flags().BoolVar(&createOptions.HostnameSpread, "hostname-spread", false, "add a hostname topology spread constraint")
 	cmdCreate.Flags().BoolVar(&createOptions.CapacityTypeSpread, "capacity-type-spread", false, "add a capacity-type topology spread constraint")
 	cmdCreate.Flags().BoolVar(&createOptions.HostNetwork, "host-network", false, "use host networking")
+	cmdCreate.Flags().StringVarP(&createOptions.CPUArch, "cpu-arch", "c", "", "CPU Architecture to use for nodeSelector")
+	cmdCreate.Flags().StringVar(&createOptions.OS, "os", "", "Operating System to use for nodeSelector")
 	cmdCreate.Flags().BoolVar(&createOptions.RandomSuffix, "random-suffix", false, "add a random suffix to the deployment name")
 	cmdCreate.Flags().BoolVar(&createOptions.DryRun, "dry-run", false, "Dry-run prints the K8s manifests without applying")
 	rootCmd.AddCommand(cmdCreate)

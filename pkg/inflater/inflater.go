@@ -45,6 +45,8 @@ type Options struct {
 	HostnameSpread     bool
 	CapacityTypeSpread bool
 	HostNetwork        bool
+	CPUArch            string
+	OS                 string
 }
 
 type Inflater struct {
@@ -116,6 +118,7 @@ func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1
 						},
 					},
 					TopologySpreadConstraints: i.topologySpread(opts, i.defaultLabels(appName)),
+					NodeSelector:              i.nodeSelector(opts),
 				},
 			},
 		},
@@ -221,6 +224,17 @@ func (i Inflater) Delete(ctx context.Context, filters DeleteFilters) error {
 		}
 	}
 	return errs
+}
+
+func (i Inflater) nodeSelector(opts Options) map[string]string {
+	nodeSelector := map[string]string{}
+	if opts.CPUArch != "" {
+		nodeSelector["kubernetes.io/arch"] = opts.CPUArch
+	}
+	if opts.OS != "" {
+		nodeSelector["kubernetes.io/os"] = opts.OS
+	}
+	return lo.Ternary(len(nodeSelector) == 0, nil, nodeSelector)
 }
 
 func (i Inflater) topologySpread(opts Options, matchLabels map[string]string) []corev1.TopologySpreadConstraint {
