@@ -79,7 +79,7 @@ func (i Inflater) CreateNamespace(ctx context.Context, namespace string) error {
 	return err
 }
 
-func (i Inflater) GetInflateDeployment(ctx context.Context, opts Options) (*appsv1.Deployment, error) {
+func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1.Deployment, error) {
 	opts, err := mergeOptions(opts)
 	if err != nil {
 		return nil, err
