@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwagner5/inflate/pkg/inflater"
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/bwagner5/inflate/pkg/inflater"
 )
 
 type CreateOptions struct {

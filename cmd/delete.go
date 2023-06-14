@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwagner5/inflate/pkg/inflater"
 	"github.com/spf13/cobra"
+
+	"github.com/bwagner5/inflate/pkg/inflater"
 )
 
 type DeleteOptions struct {

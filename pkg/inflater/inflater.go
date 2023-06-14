@@ -1,3 +1,17 @@
+/*
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package inflater
 
 import (
@@ -72,6 +86,7 @@ func (i Inflater) GetInflateDeployment(ctx context.Context, opts Options) (*apps
 	}
 	appName := "inflate"
 	if opts.RandomSuffix {
+		//nolint:gosec
 		appName += fmt.Sprintf("-%d", rand.Intn(9_999_999_999))
 	}
 	return &appsv1.Deployment{
@@ -122,7 +137,7 @@ func (i Inflater) Inflate(ctx context.Context, opts Options) (*appsv1.Deployment
 	deploymentFromAPI, err := i.clientset.AppsV1().Deployments(opts.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
-			deploymentFromAPI, err := i.clientset.AppsV1().Deployments(opts.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+			deploymentFromAPI, err = i.clientset.AppsV1().Deployments(opts.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 			return deploymentFromAPI, err
 		}
 	}

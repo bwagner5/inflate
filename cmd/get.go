@@ -20,10 +20,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwagner5/inflate/pkg/inflater"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
+
+	"github.com/bwagner5/inflate/pkg/inflater"
 )
 
 type GetOptions struct{}
@@ -34,8 +35,7 @@ type GetTableOutput struct {
 }
 
 var (
-	getOptions = &GetOptions{}
-	cmdGet     = &cobra.Command{
+	cmdGet = &cobra.Command{
 		Use:   "get [name]",
 		Short: "get an inflatable or maybe a few",
 		Args:  cobra.MinimumNArgs(0),
@@ -67,8 +67,8 @@ var (
 					}
 				})
 				sort.SliceStable(rows, func(i, j int) bool {
-					if strings.ToLower(rows[i].Namespace) == strings.ToLower(rows[j].Namespace) {
-						return strings.ToLower(rows[i].Name) == strings.ToLower(rows[j].Name)
+					if strings.EqualFold(rows[i].Namespace, rows[j].Namespace) {
+						return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
 					}
 					return strings.ToLower(rows[i].Namespace) < strings.ToLower(rows[j].Namespace)
 				})
