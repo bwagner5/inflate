@@ -47,6 +47,13 @@ type Options struct {
 	HostNetwork        bool
 	CPUArch            string
 	OS                 string
+	Service            bool
+	DryRun             bool
+}
+
+type InflateCollection struct {
+	Deployment *appsv1.Deployment
+	Service    *corev1.Service
 }
 
 type Inflater struct {
@@ -81,16 +88,21 @@ func (i Inflater) CreateNamespace(ctx context.Context, namespace string) error {
 	return err
 }
 
-func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1.Deployment, error) {
-	opts, err := mergeOptions(opts)
-	if err != nil {
-		return nil, err
-	}
+func getName(opts Options) string {
 	appName := "inflate"
 	if opts.RandomSuffix {
 		//nolint:gosec
 		appName += fmt.Sprintf("-%d", rand.Intn(9_999_999_999))
 	}
+	return appName
+}
+
+func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1.Deployment, error) {
+	opts, err := mergeOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	appName := getName(opts)
 	return &appsv1.Deployment{
 		ObjectMeta: i.objectMeta(opts.Namespace, appName),
 		Spec: appsv1.DeploymentSpec{
@@ -125,26 +137,82 @@ func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1
 	}, nil
 }
 
-func (i Inflater) Inflate(ctx context.Context, opts Options) (*appsv1.Deployment, error) {
+func (i Inflater) GetService(ctx context.Context, opts Options) (*corev1.Service, error) {
 	opts, err := mergeOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := i.CreateNamespace(ctx, opts.Namespace); err != nil {
+	appName := getName(opts)
+	return &corev1.Service{
+		ObjectMeta: i.objectMeta(opts.Namespace, appName),
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app": appName,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Port: 8080,
+				},
+			},
+		},
+	}, nil
+}
+
+func (i Inflater) Inflate(ctx context.Context, opts Options) (*InflateCollection, error) {
+	opts, err := mergeOptions(opts)
+	if err != nil {
 		return nil, err
 	}
+	if !opts.DryRun {
+		if err := i.CreateNamespace(ctx, opts.Namespace); err != nil {
+			return nil, err
+		}
+	}
+
+	inflateCollection := &InflateCollection{}
 	deployment, err := i.GetInflateDeployment(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	deploymentFromAPI, err := i.clientset.AppsV1().Deployments(opts.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
-	if err != nil {
-		if errors.IsAlreadyExists(err) {
-			deploymentFromAPI, err = i.clientset.AppsV1().Deployments(opts.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
-			return deploymentFromAPI, err
+
+	if opts.DryRun {
+		inflateCollection.Deployment = deployment
+	} else {
+		deploymentFromAPI, err := i.clientset.AppsV1().Deployments(opts.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
+		if err != nil {
+			if errors.IsAlreadyExists(err) {
+				deploymentFromAPI, err = i.clientset.AppsV1().Deployments(opts.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+				if err != nil {
+					return inflateCollection, err
+				}
+			} else {
+				return nil, err
+			}
 		}
+		inflateCollection.Deployment = deploymentFromAPI
 	}
-	return deploymentFromAPI, err
+	service, err := i.GetService(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.DryRun {
+		inflateCollection.Service = service
+	} else {
+		serviceFromAPI, err := i.clientset.CoreV1().Services(opts.Namespace).Create(ctx, service, metav1.CreateOptions{})
+		if err != nil {
+			if errors.IsAlreadyExists(err) {
+				serviceFromAPI, err = i.clientset.CoreV1().Services(opts.Namespace).Update(ctx, service, metav1.UpdateOptions{})
+				if err != nil {
+					return inflateCollection, err
+				}
+			} else {
+				return inflateCollection, err
+			}
+		}
+		inflateCollection.Service = serviceFromAPI
+	}
+	return inflateCollection, err
 }
 
 type ListFilters struct {
@@ -211,6 +279,9 @@ func (i Inflater) Delete(ctx context.Context, filters DeleteFilters) error {
 			if err := i.clientset.AppsV1().Deployments(ns).Delete(ctx, filters.Name, metav1.DeleteOptions{}); err != nil {
 				return err
 			}
+			if err := i.clientset.CoreV1().Services(ns).Delete(ctx, filters.Name, metav1.DeleteOptions{}); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -221,6 +292,17 @@ func (i Inflater) Delete(ctx context.Context, filters DeleteFilters) error {
 			LabelSelector: "managed-by=inflate",
 		}); err != nil {
 			errs = multierr.Append(errs, err)
+		}
+		services, err := i.clientset.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "managed-by=inflate",
+		})
+		if err != nil {
+			errs = multierr.Append(errs, err)
+		}
+		for _, service := range services.Items {
+			if err := i.clientset.CoreV1().Services(ns).Delete(ctx, service.Name, metav1.DeleteOptions{}); err != nil {
+				errs = multierr.Append(errs, err)
+			}
 		}
 	}
 	return errs
@@ -280,9 +362,9 @@ func (i Inflater) objectMeta(namespace string, name string) metav1.ObjectMeta {
 	}
 }
 
-func (i Inflater) defaultLabels(app string) map[string]string {
+func (i Inflater) defaultLabels(appName string) map[string]string {
 	return map[string]string{
-		"app":        app,
+		"app":        appName,
 		"managed-by": "inflate",
 	}
 }

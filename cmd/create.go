@@ -19,7 +19,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/bwagner5/inflate/pkg/inflater"
@@ -35,6 +34,7 @@ type CreateOptions struct {
 	HostNetwork        bool
 	CPUArch            string
 	OS                 string
+	Service            bool
 }
 
 var (
@@ -59,23 +59,26 @@ var (
 				HostNetwork:        createOptions.HostNetwork,
 				CPUArch:            createOptions.CPUArch,
 				OS:                 createOptions.OS,
+				Service:            createOptions.Service,
+				DryRun:             createOptions.DryRun,
 			}
-			var deployment *appsv1.Deployment
-			var err error
-			if createOptions.DryRun {
-				deployment, err = inflate.GetInflateDeployment(cmd.Context(), options)
-			} else {
-				deployment, err = inflate.Inflate(cmd.Context(), options)
-			}
+			inflateCollection, err := inflate.Inflate(cmd.Context(), options)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
 			// Output
 			if createOptions.DryRun || globalOpts.Output == OutputYAML {
-				fmt.Println(PrettyEncode(deployment))
+				fmt.Println(PrettyEncode(inflateCollection.Deployment))
+				if createOptions.Service {
+					fmt.Println("---")
+					fmt.Println(PrettyEncode(inflateCollection.Service))
+				}
 			} else {
-				fmt.Printf("Created %s/%s", deployment.GetNamespace(), deployment.GetName())
+				fmt.Printf("Created Deployment %s/%s\n", inflateCollection.Deployment.GetNamespace(), inflateCollection.Deployment.GetName())
+				if createOptions.Service {
+					fmt.Printf("Created Service %s/%s\n", inflateCollection.Service.GetNamespace(), inflateCollection.Service.GetName())
+				}
 			}
 		},
 	}
@@ -90,6 +93,7 @@ func init() {
 	cmdCreate.Flags().StringVarP(&createOptions.CPUArch, "cpu-arch", "c", "", "CPU Architecture to use for nodeSelector")
 	cmdCreate.Flags().StringVar(&createOptions.OS, "os", "", "Operating System to use for nodeSelector")
 	cmdCreate.Flags().BoolVar(&createOptions.RandomSuffix, "random-suffix", false, "add a random suffix to the deployment name")
+	cmdCreate.Flags().BoolVar(&createOptions.Service, "service", true, "Create a K8s service")
 	cmdCreate.Flags().BoolVar(&createOptions.DryRun, "dry-run", false, "Dry-run prints the K8s manifests without applying")
 	rootCmd.AddCommand(cmdCreate)
 }
