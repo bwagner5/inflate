@@ -137,7 +137,7 @@ func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1
 	}, nil
 }
 
-func (i Inflater) GetService(ctx context.Context, opts Options) (*corev1.Service, error) {
+func (i Inflater) GetService(_ context.Context, opts Options) (*corev1.Service, error) {
 	opts, err := mergeOptions(opts)
 	if err != nil {
 		return nil, err
