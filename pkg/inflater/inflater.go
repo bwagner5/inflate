@@ -106,7 +106,7 @@ func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1
 	return &appsv1.Deployment{
 		ObjectMeta: i.objectMeta(opts.Namespace, appName),
 		Spec: appsv1.DeploymentSpec{
-			Replicas: lo.ToPtr(int32(0)),
+			Replicas: lo.ToPtr(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: i.defaultLabels(appName),
 			},
