@@ -137,12 +137,11 @@ func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1
 	}, nil
 }
 
-func (i Inflater) GetService(_ context.Context, opts Options) (*corev1.Service, error) {
+func (i Inflater) GetService(_ context.Context, appName string, opts Options) (*corev1.Service, error) {
 	opts, err := mergeOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	appName := getName(opts)
 	return &corev1.Service{
 		ObjectMeta: i.objectMeta(opts.Namespace, appName),
 		Spec: corev1.ServiceSpec{
@@ -191,7 +190,7 @@ func (i Inflater) Inflate(ctx context.Context, opts Options) (*InflateCollection
 		}
 		inflateCollection.Deployment = deploymentFromAPI
 	}
-	service, err := i.GetService(ctx, opts)
+	service, err := i.GetService(ctx, inflateCollection.Deployment.Name, opts)
 	if err != nil {
 		return nil, err
 	}
