@@ -1,23 +1,28 @@
-name: CI
+name: Tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
 
 jobs:
-  build:
+  test:
+    name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
+      - name: Clone the code
+        uses: actions/checkout@v7
         with:
-          go-version-file: 'go.mod'
-          check-latest: true
-          cache-dependency-path: '**/go.sum'
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
       - name: Verify
-        run: make toolchain verify
-      - name: Test
-        run: make test
+        run: make ci-verify

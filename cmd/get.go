@@ -12,75 +12,87 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command inflate creates Kubernetes workloads for scheduling and autoscaling demos.
 package main
 
 import (
 	"fmt"
-	"os"
 	"sort"
-	"strings"
+	"text/tabwriter"
 
-	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/yaml"
 
 	"github.com/bwagner5/inflate/pkg/inflater"
 )
 
-type GetOptions struct{}
-
-type GetTableOutput struct {
-	Namespace string `table:"namespace"`
-	Name      string `table:"name"`
-}
-
-var (
-	cmdGet = &cobra.Command{
+func newGetCommand(
+	global *globalOptions,
+	clientFactory func() (kubernetes.Interface, error),
+) *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
 		Use:   "get [name]",
-		Short: "get an inflatable or maybe a few",
-		Args:  cobra.MinimumNArgs(0),
-		Run: func(cmd *cobra.Command, args []string) {
-			clientset := kubeClientset()
-			inflate := inflater.New(clientset)
-			listFilters := inflater.ListFilters{}
-			if rootCmd.Flag("namespace").Changed {
-				listFilters.Namespace = globalOpts.Namespace
-			}
-			if len(args) > 0 {
-				listFilters.Name = args[0]
-			}
-
-			deployments, err := inflate.List(cmd.Context(), listFilters)
+		Short: "List inflate Deployments",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFactory()
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
+				return err
 			}
+			inflate := inflater.New(client)
+			var deployments []appsv1.Deployment
+			if len(args) == 1 {
+				deployment, err := inflate.Get(cmd.Context(), global.namespace, args[0])
+				if err != nil {
+					return err
+				}
+				deployments = []appsv1.Deployment{*deployment}
+			} else {
+				deployments, err = inflate.List(cmd.Context(), global.namespace)
+				if err != nil {
+					return err
+				}
+			}
+			sort.Slice(deployments, func(left, right int) bool {
+				return deployments[left].Name < deployments[right].Name
+			})
 
-			switch globalOpts.Output {
-			case OutputYAML:
-				fmt.Println(PrettyEncode(deployments))
-			case OutputTableShort, OutputTableWide:
-				rows := lo.Map(deployments, func(deployment appsv1.Deployment, _ int) GetTableOutput {
-					return GetTableOutput{
-						Name:      deployment.Name,
-						Namespace: deployment.Namespace,
-					}
-				})
-				sort.SliceStable(rows, func(i, j int) bool {
-					if strings.EqualFold(rows[i].Namespace, rows[j].Namespace) {
-						return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
-					}
-					return strings.ToLower(rows[i].Namespace) < strings.ToLower(rows[j].Namespace)
-				})
-				fmt.Println(PrettyTable(rows, globalOpts.Output == OutputTableWide))
+			switch output {
+			case "table":
+				return printDeploymentTable(cmd, deployments)
+			case "yaml":
+				encoded, err := yaml.Marshal(deployments)
+				if err != nil {
+					return fmt.Errorf("encode Deployments: %w", err)
+				}
+				_, err = fmt.Fprint(cmd.OutOrStdout(), string(encoded))
+				return err
 			default:
-				fmt.Printf("unknown output options %s\n", globalOpts.Output)
-				os.Exit(1)
+				return fmt.Errorf("unknown output %q (expected table or yaml)", output)
 			}
 		},
 	}
-)
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table or yaml")
+	return cmd
+}
 
-func init() {
-	rootCmd.AddCommand(cmdGet)
+func printDeploymentTable(cmd *cobra.Command, deployments []appsv1.Deployment) error {
+	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "NAME\tREPLICAS\tCPU\tMEMORY"); err != nil {
+		return err
+	}
+	for _, deployment := range deployments {
+		container := deployment.Spec.Template.Spec.Containers[0]
+		cpu := container.Resources.Requests.Cpu().String()
+		memory := container.Resources.Requests.Memory().String()
+		if _, err := fmt.Fprintf(
+			writer, "%s\t%d\t%s\t%s\n", deployment.Name, *deployment.Spec.Replicas, cpu, memory,
+		); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
 }

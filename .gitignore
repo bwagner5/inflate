@@ -1,2 +1,4 @@
 build/
+bin/
+cover.out
 dist/

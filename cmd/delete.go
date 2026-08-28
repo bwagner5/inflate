@@ -12,53 +12,51 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command inflate creates Kubernetes workloads for scheduling and autoscaling demos.
 package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/bwagner5/inflate/pkg/inflater"
 )
 
-type DeleteOptions struct {
-	All bool
-}
-
-var (
-	deleteOptions = &DeleteOptions{}
-	cmdDelete     = &cobra.Command{
+func newDeleteCommand(
+	global *globalOptions,
+	clientFactory func() (kubernetes.Interface, error),
+) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "delete [name]",
-		Short: "delete an inflatable or maybe a few",
-		Args:  cobra.MinimumNArgs(0),
-		Run: func(cmd *cobra.Command, args []string) {
-			if !rootCmd.Flag("namespace").Changed && len(args) == 0 && !deleteOptions.All {
-				fmt.Println("must specify --namespace OR name OR --all")
-				os.Exit(1)
+		Short: "Delete inflate Deployments",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 && !all {
+				return fmt.Errorf("specify a Deployment name or --all")
 			}
-			clientset := kubeClientset()
-			inflate := inflater.New(clientset)
-			deleteFilters := inflater.DeleteFilters{}
-			if rootCmd.Flag("namespace").Changed {
-				deleteFilters.Namespace = globalOpts.Namespace
+			if len(args) == 1 && all {
+				return fmt.Errorf("a Deployment name and --all cannot be used together")
 			}
-			if len(args) > 0 {
-				deleteFilters.Name = args[0]
-			}
-
-			err := inflate.Delete(cmd.Context(), deleteFilters)
+			client, err := clientFactory()
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
+				return err
 			}
-			fmt.Println("Successfully Deleted Inflates")
+			inflate := inflater.New(client)
+			if all {
+				err = inflate.DeleteAll(cmd.Context(), global.namespace)
+			} else {
+				err = inflate.Delete(cmd.Context(), global.namespace, args[0])
+			}
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "Deployments deleted")
+			return err
 		},
 	}
-)
-
-func init() {
-	cmdDelete.Flags().BoolVarP(&deleteOptions.All, "all", "a", false, "delete all inflates")
-	rootCmd.AddCommand(cmdDelete)
+	cmd.Flags().BoolVarP(&all, "all", "a", false, "delete all inflate Deployments in the namespace")
+	return cmd
 }

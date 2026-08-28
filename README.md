@@ -1,113 +1,45 @@
 # inflate
 
-Inflate creates test deployments with various scheduling constraints. 
+`inflate` creates Kubernetes Deployments for scheduler and node-autoscaler demos.
 
-## Usage:
+## Karpenter demo
 
-```
-> inflate --help
-Usage:
-  inflate [command]
+Point your current kubeconfig context at the demo cluster and run:
 
-Available Commands:
-  create      create an inflatable or maybe a few
-  delete      delete an inflatable or maybe a few
-  get         get an inflatable or maybe a few
-  help        Help about any command
-
-Flags:
-  -f, --file string         YAML Config File
-  -h, --help                help for inflate
-  -k, --kubeconfig string   path to the kubeconfig file (default "/Users/wagnerbm/k8s/karpenter-dev/karpenter-dev")
-  -n, --namespace string    k8s namespace (default "inflate")
-  -o, --output string       Output mode: [short wide yaml] (default "short")
-      --verbose             Verbose output
-      --version             version
-
-Use "inflate [command] --help" for more information about a command.
+```console
+inflate demo
 ```
 
-```
-> inflate create --help
-create an inflatable or maybe a few
+The foreground loop creates independently randomized single-pod Deployments, grows to 5–20 demo pods, holds, then removes them and repeats. CPU requests range from 250m to 10 cores and memory requests range from 256Mi to 5Gi. Required hostname anti-affinity places each demo pod on a different node, giving Karpenter clear scale-up and scale-down events without creating an unbounded cluster. Press Ctrl-C to remove the demo workloads and stop.
 
-Usage:
-  inflate create [flags]
+The default `medium` preset is suitable for a varied autoscaling demo. Two other presets bundle useful sizing and timing defaults:
 
-Flags:
-      --capacity-type-spread   add a capacity-type topology spread constraint
-  -c, --cpu-arch string        CPU Architecture to use for nodeSelector
-      --dry-run                Dry-run prints the K8s manifests without applying
-  -h, --help                   help for create
-      --host-network           use host networking
-      --hostname-spread        add a hostname topology spread constraint
-  -i, --image string           Container image to use (default "public.ecr.aws/eks-distro/kubernetes/pause:3.7")
-      --os string              Operating System to use for nodeSelector
-      --random-suffix          add a random suffix to the deployment name
-  -z, --zonal-spread           add a zonal topology spread constraint
+| Preset | Pod/node target | Replicas per Deployment | CPU per pod | Memory per pod | Change interval | Hold |
+| --- | --- | --- | --- | --- | --- | --- |
+| `low` | 5–10 | 1–3 | 250m–1500m | 256Mi–1536Mi | 15s | 1m |
+| `medium` (default) | 5–20 | 1 | 250m–10 cores | 256Mi–5Gi | 15s | 2m |
+| `high` | 20–50 | 1 | 250m–10 cores | 256Mi–5Gi | 5s | 1m |
 
-Global Flags:
-  -f, --file string         YAML Config File
-  -k, --kubeconfig string   path to the kubeconfig file (default "/Users/wagnerbm/k8s/karpenter-dev/karpenter-dev")
-  -n, --namespace string    k8s namespace (default "inflate")
-  -o, --output string       Output mode: [short wide yaml] (default "short")
-      --verbose             Verbose output
-      --version             version
+Select a preset with `--preset`. Any explicitly specified sizing or timing flag overrides the selected preset, so this uses the low preset with a longer hold:
+
+```sh
+inflate demo --preset low --hold 3m
 ```
 
-## Installation:
+Timing, resource ranges, and node bounds are configurable:
 
-```
-brew install bwagner5/wagner/inflate
-```
-
-Packages, binaries, and archives are published for all major platforms (Mac amd64/arm64 & Linux amd64/arm64):
-
-Debian / Ubuntu:
-
-```
-[[ `uname -m` == "aarch64" ]] && ARCH="arm64" || ARCH="amd64"
-OS=`uname | tr '[:upper:]' '[:lower:]'`
-wget https://github.com/bwagner5/inflate/releases/download/v0.0.2/inflate_0.0.2_${OS}_${ARCH}.deb
-dpkg --install inflate_0.0.2_linux_amd64.deb
-inflate --help
+```console
+inflate demo --min-nodes 5 --max-nodes 8 --interval 20s --hold 2m
 ```
 
-RedHat:
+The cluster's baseline nodes and Karpenter limits can make the total node count differ from the demo pod target.
 
-```
-[[ `uname -m` == "aarch64" ]] && ARCH="arm64" || ARCH="amd64"
-OS=`uname | tr '[:upper:]' '[:lower:]'`
-rpm -i https://github.com/bwagner5/inflate/releases/download/v0.0.2/inflate_0.0.2_${OS}_${ARCH}.rpm
-```
+## Create one Deployment
 
-Download Binary Directly:
-
-```
-[[ `uname -m` == "aarch64" ]] && ARCH="arm64" || ARCH="amd64"
-OS=`uname | tr '[:upper:]' '[:lower:]'`
-wget -qO- https://github.com/bwagner5/inflate/releases/download/v0.0.2/inflate_0.0.2_${OS}_${ARCH}.tar.gz | tar xvz
-chmod +x inflate
+```console
+inflate create example --replicas 3 --cpu 750m --memory 512Mi
+inflate get
+inflate delete example
 ```
 
-## Examples: 
-
-```
-> inflate create --zonal-spread
-Created inflate/inflate
-
-> inflate get
-NAMESPACE	NAME
-inflate  	inflate
-
-> inflate create --random-suffix --hostname-spread --host-network -n my-ns
-Created my-ns/inflate-9797840640
-
-> inflate get
-NAMESPACE	NAME
-inflate  	inflate
-my-ns    	inflate-9797840640
-
-> inflate delete --all
-Successfully Deleted Inflates
-```
+Use `inflate create --help` or `inflate demo --help` for all scheduling and kubeconfig options. Release archives for macOS and Linux on amd64 and arm64 are available from [GitHub Releases](https://github.com/bwagner5/inflate/releases).

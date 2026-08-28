@@ -12,366 +12,286 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package inflater creates and manages deliberately schedulable Kubernetes workloads.
 package inflater
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"maps"
 
-	"github.com/imdario/mergo"
-	"github.com/samber/lo"
-	"go.uber.org/multierr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 )
 
-var (
-	DefaultOptions = Options{
-		Namespace:   "inflate",
-		ZonalSpread: false,
-	}
+// Labels placed on all inflate resources.
+const (
+	LabelName      = "app.kubernetes.io/name"
+	LabelInstance  = "app.kubernetes.io/instance"
+	LabelManagedBy = "app.kubernetes.io/managed-by"
+	LabelDemo      = "inflate.bwagner.dev/demo"
+
+	legacyLabelApp       = "app"
+	legacyLabelManagedBy = "managed-by"
+	managedByValue       = "inflate"
 )
 
+// Options describes one inflate Deployment.
 type Options struct {
-	RandomSuffix       bool
+	Name               string
 	Namespace          string
 	Image              string
-	ZonalSpread        bool
+	CPU                string
+	Memory             string
+	Replicas           int32
+	DemoID             string
+	OnePerNode         bool
 	HostnameSpread     bool
+	ZonalSpread        bool
 	CapacityTypeSpread bool
 	HostNetwork        bool
 	CPUArch            string
 	OS                 string
-	Service            bool
-	DryRun             bool
 }
 
-type InflateCollection struct {
-	Deployment *appsv1.Deployment
-	Service    *corev1.Service
-}
-
+// Inflater manages inflate Deployments through a Kubernetes client.
 type Inflater struct {
-	clientset *kubernetes.Clientset
+	client kubernetes.Interface
 }
 
-func New(clientset *kubernetes.Clientset) *Inflater {
-	return &Inflater{
-		clientset: clientset,
+// New creates an Inflater.
+func New(client kubernetes.Interface) *Inflater {
+	return &Inflater{client: client}
+}
+
+// EnsureNamespace creates the target namespace when it does not already exist.
+func (i *Inflater) EnsureNamespace(ctx context.Context, namespace string) error {
+	if _, err := i.client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return err
 	}
-}
 
-func GetDefaultOptions() Options {
-	return Options{
-		Namespace:   "inflate",
-		ZonalSpread: false,
-	}
-}
-
-func (i Inflater) CreateNamespace(ctx context.Context, namespace string) error {
-	_, err := i.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+	_, err := i.client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: namespace,
 			Labels: map[string]string{
-				"managed-by": "inflate",
+				LabelManagedBy: managedByValue,
 			},
 		},
 	}, metav1.CreateOptions{})
-	if errors.IsAlreadyExists(err) {
+	if apierrors.IsAlreadyExists(err) {
 		return nil
 	}
 	return err
 }
 
-func getName(opts Options) string {
-	appName := "inflate"
-	if opts.RandomSuffix {
-		//nolint:gosec
-		appName += fmt.Sprintf("-%d", rand.Intn(9_999_999_999))
+// Deployment builds a Deployment without contacting Kubernetes.
+func Deployment(opts Options) (*appsv1.Deployment, error) {
+	if opts.Name == "" {
+		return nil, fmt.Errorf("name must not be empty")
 	}
-	return appName
-}
+	if opts.Namespace == "" {
+		return nil, fmt.Errorf("namespace must not be empty")
+	}
+	if opts.Image == "" {
+		return nil, fmt.Errorf("image must not be empty")
+	}
+	if opts.Replicas < 1 {
+		return nil, fmt.Errorf("replicas must be at least 1")
+	}
 
-func (i Inflater) GetInflateDeployment(_ context.Context, opts Options) (*appsv1.Deployment, error) {
-	opts, err := mergeOptions(opts)
-	if err != nil {
-		return nil, err
+	cpu, err := resource.ParseQuantity(opts.CPU)
+	if err != nil || cpu.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid CPU request %q", opts.CPU)
 	}
-	appName := getName(opts)
+	memory, err := resource.ParseQuantity(opts.Memory)
+	if err != nil || memory.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid memory request %q", opts.Memory)
+	}
+
+	selectorLabels := map[string]string{
+		legacyLabelApp:       opts.Name,
+		legacyLabelManagedBy: managedByValue,
+	}
+	podLabels := maps.Clone(selectorLabels)
+	podLabels[LabelName] = "inflate"
+	podLabels[LabelInstance] = opts.Name
+	podLabels[LabelManagedBy] = managedByValue
+	if opts.DemoID != "" {
+		podLabels[LabelDemo] = opts.DemoID
+	}
+
+	podSpec := corev1.PodSpec{
+		HostNetwork:                   opts.HostNetwork,
+		TerminationGracePeriodSeconds: new(int64),
+		Containers: []corev1.Container{{
+			Name:  "inflate",
+			Image: opts.Image,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    cpu,
+					corev1.ResourceMemory: memory,
+				},
+			},
+		}},
+		NodeSelector:              nodeSelector(opts),
+		TopologySpreadConstraints: topologySpreadConstraints(opts, selectorLabels),
+	}
+	if opts.OnePerNode {
+		antiAffinityLabels := selectorLabels
+		if opts.DemoID != "" {
+			antiAffinityLabels = map[string]string{
+				legacyLabelManagedBy: managedByValue,
+				LabelDemo:            opts.DemoID,
+			}
+		}
+		podSpec.Affinity = &corev1.Affinity{
+			PodAntiAffinity: &corev1.PodAntiAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: antiAffinityLabels},
+					TopologyKey:   corev1.LabelHostname,
+				}},
+			},
+		}
+	}
+
 	return &appsv1.Deployment{
-		ObjectMeta: i.objectMeta(opts.Namespace, appName),
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: appsv1.SchemeGroupVersion.String(),
+			Kind:       "Deployment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.Name,
+			Namespace: opts.Namespace,
+			Labels:    podLabels,
+		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: lo.ToPtr(int32(1)),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: i.defaultLabels(appName),
-			},
+			Replicas: new(opts.Replicas),
+			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: i.defaultLabels(appName),
-				},
-				Spec: corev1.PodSpec{
-					HostNetwork:                   opts.HostNetwork,
-					TerminationGracePeriodSeconds: lo.ToPtr(int64(0)),
-					Containers: []corev1.Container{
-						{
-							Name:  appName,
-							Image: opts.Image,
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    *resource.NewQuantity(1, resource.DecimalSI),
-									corev1.ResourceMemory: *resource.NewQuantity(256, resource.BinarySI),
-								},
-							},
-						},
-					},
-					TopologySpreadConstraints: i.topologySpread(opts, i.defaultLabels(appName)),
-					NodeSelector:              i.nodeSelector(opts),
-				},
+				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
+				Spec:       podSpec,
 			},
 		},
 	}, nil
 }
 
-func (i Inflater) GetService(_ context.Context, appName string, opts Options) (*corev1.Service, error) {
-	opts, err := mergeOptions(opts)
-	if err != nil {
-		return nil, err
-	}
-	return &corev1.Service{
-		ObjectMeta: i.objectMeta(opts.Namespace, appName),
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app": appName,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Port: 8080,
-				},
-			},
-		},
-	}, nil
-}
-
-func (i Inflater) Inflate(ctx context.Context, opts Options) (*InflateCollection, error) {
-	opts, err := mergeOptions(opts)
-	if err != nil {
-		return nil, err
-	}
-	if !opts.DryRun {
-		if err := i.CreateNamespace(ctx, opts.Namespace); err != nil {
-			return nil, err
-		}
-	}
-
-	inflateCollection := &InflateCollection{}
-	deployment, err := i.GetInflateDeployment(ctx, opts)
+// Apply creates a Deployment or updates its mutable fields when it already exists.
+func (i *Inflater) Apply(ctx context.Context, opts Options) (*appsv1.Deployment, error) {
+	desired, err := Deployment(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	if opts.DryRun {
-		inflateCollection.Deployment = deployment
-	} else {
-		deploymentFromAPI, err := i.clientset.AppsV1().Deployments(opts.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
-		if err != nil {
-			if errors.IsAlreadyExists(err) {
-				deploymentFromAPI, err = i.clientset.AppsV1().Deployments(opts.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
-				if err != nil {
-					return inflateCollection, err
-				}
-			} else {
-				return nil, err
-			}
-		}
-		inflateCollection.Deployment = deploymentFromAPI
+	current, err := i.client.AppsV1().Deployments(opts.Namespace).Get(
+		ctx, opts.Name, metav1.GetOptions{},
+	)
+	if apierrors.IsNotFound(err) {
+		return i.client.AppsV1().Deployments(opts.Namespace).Create(
+			ctx, desired, metav1.CreateOptions{},
+		)
 	}
-	service, err := i.GetService(ctx, inflateCollection.Deployment.Name, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	if opts.DryRun {
-		inflateCollection.Service = service
-	} else {
-		serviceFromAPI, err := i.clientset.CoreV1().Services(opts.Namespace).Create(ctx, service, metav1.CreateOptions{})
-		if err != nil {
-			if errors.IsAlreadyExists(err) {
-				serviceFromAPI, err = i.clientset.CoreV1().Services(opts.Namespace).Update(ctx, service, metav1.UpdateOptions{})
-				if err != nil {
-					return inflateCollection, err
-				}
-			} else {
-				return inflateCollection, err
-			}
-		}
-		inflateCollection.Service = serviceFromAPI
+	// A Deployment selector is immutable. Return a useful error rather than sending
+	// an update that the API server will reject if this name belongs to something else.
+	if !labels.Equals(labels.Set(current.Spec.Selector.MatchLabels), labels.Set(desired.Spec.Selector.MatchLabels)) {
+		return nil, fmt.Errorf("deployment %s/%s exists with a different selector", opts.Namespace, opts.Name)
 	}
-	return inflateCollection, err
+	current.Labels = desired.Labels
+	current.Spec.Replicas = desired.Spec.Replicas
+	current.Spec.Template = desired.Spec.Template
+	return i.client.AppsV1().Deployments(opts.Namespace).Update(
+		ctx, current, metav1.UpdateOptions{},
+	)
 }
 
-type ListFilters struct {
-	Namespace string
-	Name      string
+// List returns inflate-managed Deployments in one namespace.
+func (i *Inflater) List(ctx context.Context, namespace string) ([]appsv1.Deployment, error) {
+	list, err := i.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{legacyLabelManagedBy: managedByValue}.String(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
 
-func (i Inflater) List(ctx context.Context, filters ListFilters) ([]appsv1.Deployment, error) {
-	var namespaces []string
-	var deployments []appsv1.Deployment
-	if filters.Namespace != "" {
-		namespaces = append(namespaces, filters.Namespace)
-	} else {
-		namespaceList, err := i.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-			LabelSelector: "managed-by=inflate",
-		})
-		if err != nil {
-			return nil, err
-		}
-		namespaces = lo.Map(namespaceList.Items, func(ns corev1.Namespace, _ int) string { return ns.Name })
-	}
-	if filters.Name != "" {
-		for _, ns := range namespaces {
-			deployment, err := i.clientset.AppsV1().Deployments(ns).Get(ctx, filters.Name, metav1.GetOptions{})
-			if err != nil {
-				return nil, err
-			}
-			deployments = append(deployments, *deployment)
-		}
-		return deployments, nil
-	}
-
-	var errs error
-	for _, ns := range namespaces {
-		deploymentList, err := i.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "managed-by=inflate",
-		})
-		errs = multierr.Append(errs, err)
-		deployments = append(deployments, deploymentList.Items...)
-	}
-	return deployments, errs
+// Get returns one Deployment by name.
+func (i *Inflater) Get(ctx context.Context, namespace, name string) (*appsv1.Deployment, error) {
+	return i.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-type DeleteFilters struct {
-	Namespace string
-	Name      string
-}
-
-func (i Inflater) Delete(ctx context.Context, filters DeleteFilters) error {
-	var namespaces []string
-	if filters.Namespace != "" {
-		namespaces = append(namespaces, filters.Namespace)
-	} else {
-		namespaceList, err := i.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-			LabelSelector: "managed-by=inflate",
-		})
-		if err != nil {
-			return err
-		}
-		namespaces = lo.Map(namespaceList.Items, func(ns corev1.Namespace, _ int) string { return ns.Name })
-	}
-	if filters.Name != "" {
-		for _, ns := range namespaces {
-			if err := i.clientset.AppsV1().Deployments(ns).Delete(ctx, filters.Name, metav1.DeleteOptions{}); err != nil {
-				return err
-			}
-			if err := i.clientset.CoreV1().Services(ns).Delete(ctx, filters.Name, metav1.DeleteOptions{}); err != nil {
-				return err
-			}
-		}
+// Delete removes one Deployment by name.
+func (i *Inflater) Delete(ctx context.Context, namespace, name string) error {
+	err := i.client.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
 		return nil
 	}
-
-	var errs error
-	for _, ns := range namespaces {
-		if err := i.clientset.AppsV1().Deployments(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
-			LabelSelector: "managed-by=inflate",
-		}); err != nil {
-			errs = multierr.Append(errs, err)
-		}
-		services, err := i.clientset.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "managed-by=inflate",
-		})
-		if err != nil {
-			errs = multierr.Append(errs, err)
-		}
-		for _, service := range services.Items {
-			if err := i.clientset.CoreV1().Services(ns).Delete(ctx, service.Name, metav1.DeleteOptions{}); err != nil {
-				errs = multierr.Append(errs, err)
-			}
-		}
-	}
-	return errs
+	return err
 }
 
-func (i Inflater) nodeSelector(opts Options) map[string]string {
-	nodeSelector := map[string]string{}
+// DeleteAll removes all inflate-managed Deployments in one namespace.
+func (i *Inflater) DeleteAll(ctx context.Context, namespace string) error {
+	return i.deleteCollection(ctx, namespace, labels.Set{legacyLabelManagedBy: managedByValue}.String())
+}
+
+// DeleteDemo removes all Deployments belonging to one demo run.
+func (i *Inflater) DeleteDemo(ctx context.Context, namespace, demoID string) error {
+	return i.deleteCollection(ctx, namespace, labels.Set{
+		legacyLabelManagedBy: managedByValue,
+		LabelDemo:            demoID,
+	}.String())
+}
+
+func (i *Inflater) deleteCollection(ctx context.Context, namespace, selector string) error {
+	return i.client.AppsV1().Deployments(namespace).DeleteCollection(
+		ctx,
+		metav1.DeleteOptions{},
+		metav1.ListOptions{LabelSelector: selector},
+	)
+}
+
+func nodeSelector(opts Options) map[string]string {
+	selector := map[string]string{}
 	if opts.CPUArch != "" {
-		nodeSelector["kubernetes.io/arch"] = opts.CPUArch
+		selector[corev1.LabelArchStable] = opts.CPUArch
 	}
 	if opts.OS != "" {
-		nodeSelector["kubernetes.io/os"] = opts.OS
+		selector[corev1.LabelOSStable] = opts.OS
 	}
-	return lo.Ternary(len(nodeSelector) == 0, nil, nodeSelector)
+	if len(selector) == 0 {
+		return nil
+	}
+	return selector
 }
 
-func (i Inflater) topologySpread(opts Options, matchLabels map[string]string) []corev1.TopologySpreadConstraint {
-	var topologySpreadConstraints []corev1.TopologySpreadConstraint
-	if opts.ZonalSpread {
-		topologySpreadConstraints = append(topologySpreadConstraints, corev1.TopologySpreadConstraint{
-			MaxSkew:           int32(1),
-			TopologyKey:       corev1.LabelTopologyZone,
-			WhenUnsatisfiable: "DoNotSchedule",
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: matchLabels,
-			},
+func topologySpreadConstraints(
+	opts Options,
+	matchLabels map[string]string,
+) []corev1.TopologySpreadConstraint {
+	var constraints []corev1.TopologySpreadConstraint
+	add := func(enabled bool, topologyKey string) {
+		if !enabled {
+			return
+		}
+		constraints = append(constraints, corev1.TopologySpreadConstraint{
+			MaxSkew:           1,
+			TopologyKey:       topologyKey,
+			WhenUnsatisfiable: corev1.DoNotSchedule,
+			LabelSelector:     &metav1.LabelSelector{MatchLabels: matchLabels},
 		})
 	}
-	if opts.HostnameSpread {
-		topologySpreadConstraints = append(topologySpreadConstraints, corev1.TopologySpreadConstraint{
-			MaxSkew:           int32(1),
-			TopologyKey:       corev1.LabelHostname,
-			WhenUnsatisfiable: "DoNotSchedule",
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: matchLabels,
-			},
-		})
-	}
-	if opts.CapacityTypeSpread {
-		topologySpreadConstraints = append(topologySpreadConstraints, corev1.TopologySpreadConstraint{
-			MaxSkew:           int32(1),
-			TopologyKey:       "karpenter.sh/capacity-type",
-			WhenUnsatisfiable: "DoNotSchedule",
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: matchLabels,
-			},
-		})
-	}
-	return topologySpreadConstraints
-}
-
-func (i Inflater) objectMeta(namespace string, name string) metav1.ObjectMeta {
-	return metav1.ObjectMeta{
-		Name:      name,
-		Namespace: namespace,
-		Labels:    i.defaultLabels(name),
-	}
-}
-
-func (i Inflater) defaultLabels(appName string) map[string]string {
-	return map[string]string{
-		"app":        appName,
-		"managed-by": "inflate",
-	}
-}
-
-func mergeOptions(opts Options) (Options, error) {
-	options := GetDefaultOptions()
-	if err := mergo.MergeWithOverwrite(&options, opts); err != nil {
-		return options, err
-	}
-	return options, nil
+	add(opts.HostnameSpread, corev1.LabelHostname)
+	add(opts.ZonalSpread, corev1.LabelTopologyZone)
+	add(opts.CapacityTypeSpread, "karpenter.sh/capacity-type")
+	return constraints
 }
